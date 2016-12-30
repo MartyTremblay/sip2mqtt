@@ -7,6 +7,8 @@ import argparse
 import pjsua as pj
 import paho.mqtt.client as mqtt
 
+global args
+
 def signal_handler(signal, frame):
     print 'Exiting...'
     print"-- Unregistering --"
@@ -18,16 +20,18 @@ def signal_handler(signal, frame):
 
 # Method to print Log of callback class
 def log_cb(level, str, len):
-    print(str),
+    logging.debug("SIP debug: " + str),
 
 # Callback for an established MQTT broker connection
 def mqtt_connect(broker, userdata, flags, rc):
     logging.info("MQTT: Connected with the broker...")
 
 class SMCallCallback(pj.CallCallback):
-
+    global args
+    
     def __init__(self, call=None):
         pj.CallCallback.__init__(self, call)
+        self.args = args
 
     def on_media_state(self):
         #this event never really happens as sip2mqtt is never the one to answer the call.
@@ -56,9 +60,11 @@ class SMCallCallback(pj.CallCallback):
 
 # Callback to receive events from account
 class SMAccountCallback(pj.AccountCallback):
+    global args
 
     def __init__(self, account=None):
         pj.AccountCallback.__init__(self, account)
+        self.args = args
 
     def on_reg_state(self):
         logging.info( "SIP: Registration complete, status=" + str(self.account.info().reg_status) + " (" + str(self.account.info().reg_reason) + ")" )
@@ -66,12 +72,13 @@ class SMAccountCallback(pj.AccountCallback):
     # Notification on incoming call
     def on_incoming_call(self, call):
         logging.info( "SIP: Incoming call from " + call.info().remote_uri )
-        broker.publish(args.status_topic, payload="Incoming call from " + call.info().remote_uri, qos=1, retain=True)
+        broker.publish(args.status_topic, payload="Incoming call from " + call.info().remote_uri, qos=0, retain=True)
 
 def main(argv):
     global broker
     global pj
     global lib
+    global args
 
     app_name="SIP2MQTT"
 
@@ -100,8 +107,6 @@ def main(argv):
 
     args = parser.parse_args()
 
-    print args.mqtt_address
-
     log_level = logging.INFO #Deault logging level
     if args.verbosity == 1:
         log_level = logging.ERROR
@@ -113,7 +118,11 @@ def main(argv):
         log_level = logging.DEBUG
 
     # Configure logging
-    logging.basicConfig(filename="sip2mqtt.log", format="%(asctime)s - %(levelname)s - %(message)s",
+    # logging.basicConfig(filename="sip2mqtt.log", format="%(asctime)s - %(levelname)s - %(message)s",
+    #                     datefmt="%m/%d/%Y %I:%M:%S %p", level=log_level)
+
+    # A more docker-friendly approach is to output to stdout
+    logging.basicConfig(stream=sys.stdout, format="%(asctime)s - %(levelname)s - %(message)s",
                         datefmt="%m/%d/%Y %I:%M:%S %p", level=log_level)
 
     # Log startup messages and our configuration parameters
