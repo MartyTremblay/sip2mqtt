@@ -1,19 +1,25 @@
 import sys
+import os as os
 import signal
 import logging
 import threading
 import time
+import re
 import argparse
 import pjsua as pj
 import paho.mqtt.client as mqtt
 
 global args
 
+def extract_caller_id(url):
+    m = re.match(r"\"(.*)\"", url)
+    return m.group(1)
+
 def signal_handler(signal, frame):
-    print 'Exiting...'
-    print"-- Unregistering --"
+    logging.info( 'Exiting...' )
+    logging.info( '-- Unregistering --' )
     time.sleep(2)
-    print "-- Destroying Libraries --"
+    logging.info( '-- Destroying Libraries --' )
     time.sleep(2)
     lib.destroy()
     sys.exit(0)
@@ -26,38 +32,6 @@ def log_cb(level, str, len):
 def mqtt_connect(broker, userdata, flags, rc):
     logging.info("MQTT: Connected with the broker...")
 
-class SMCallCallback(pj.CallCallback):
-    global args
-    
-    def __init__(self, call=None):
-        pj.CallCallback.__init__(self, call)
-        self.args = args
-
-    def on_media_state(self):
-        #this event never really happens as sip2mqtt is never the one to answer the call.
-        logging.info( "SIP: ON MEDIA STATE " + self.call.info() )
-        if self.call.info().media_state == pj.MediaState.ACTIVE:
-            logging.info("SIP: Media is now active")
-        else:
-            logging.info( "SIP: Media is inactive")
-
-    def on_state(self):
-        logging.info( "SIP: ON STATE " + self.call )
-        logging.info( str(self.call.dump_status()) )
-        logging.info( "SIP: Call with" + self.call.info().remote_uri )
-        logging.info( "is" + self.call.info().state_text )
-        logging.info( "last code =" + str(self.call.info().last_code) )
-        logging.info( "(" + self.call.info().last_reason + ")" )
-
-        if self.call.info().state == pj.CallState.CONFIRMED:
-            #this state never really happens as sip2mqtt is never the one to answer the call.
-            logging.info( 'SIP: Current call is answered' )
-            broker.publish(args.status_topic, payload="Call from " + call.info().remote_uri + " answered", qos=0, retain=True)
-
-        elif self.call.info().state == pj.CallState.DISCONNECTED:
-            logging.info( 'SIP: Current call has ended' )
-            broker.publish(args.status_topic, payload="Call from " + call.info().remote_uri + " ended", qos=0, retain=True)
-
 # Callback to receive events from account
 class SMAccountCallback(pj.AccountCallback):
     global args
@@ -69,10 +43,34 @@ class SMAccountCallback(pj.AccountCallback):
     def on_reg_state(self):
         logging.info( "SIP: Registration complete, status=" + str(self.account.info().reg_status) + " (" + str(self.account.info().reg_reason) + ")" )
 
-    # Notification on incoming call
     def on_incoming_call(self, call):
-        logging.info( "SIP: Incoming call from " + call.info().remote_uri )
-        broker.publish(args.status_topic, payload="Incoming call from " + call.info().remote_uri, qos=0, retain=True)
+        # Unless this callback is implemented, the default behavior is to reject the call with default status code.
+        logging.info( "SIP: Incoming call from " + extract_caller_id( call.info().remote_uri ) )
+        broker.publish(args.status_topic, payload="{verb: 'incoming', caller:'" + extract_caller_id( call.info().remote_uri ) + "', uri:'" + call.info().remote_uri + "'}", qos=0, retain=True)
+
+        current_call = call
+        call_cb = SMCallCallback(current_call)
+        current_call.set_callback(call_cb)
+
+    def on_pager(self, from_uri, contact, mime_type, body):
+        logging.info( "SIP: Incoming SMS from " + from_uri )
+        broker.publish(args.status_topic, payload="{verb: 'sms', caller:'" + from_uri + "', body:'" + body + "'}", qos=0, retain=True)
+
+
+class SMCallCallback(pj.CallCallback):
+    def __init__(self, call=None):
+        pj.CallCallback.__init__(self, call)
+        self.args = args
+
+    # Notification when call state has changed
+    def on_state(self):
+        logging.info( 'SIP: Call state is: ' +  self.call.info().state_text )
+        if self.call.info().state == pj.CallState.CONFIRMED:
+            logging.info( 'SIP: Current call is answered' )
+            broker.publish(args.status_topic, payload="{verb: 'answered', caller:'" + extract_caller_id( self.call.info().remote_uri ) + "', uri:'" + self.call.info().remote_uri + "'}", qos=0, retain=True)
+        elif self.call.info().state == pj.CallState.DISCONNECTED:
+            logging.info( 'SIP: Current call has ended' )
+            broker.publish(args.status_topic, payload="{verb: 'disconnected', caller:'', uri:''}", qos=0, retain=True)
 
 def main(argv):
     global broker
@@ -85,20 +83,20 @@ def main(argv):
     parser = argparse.ArgumentParser(description='A SIP monitoring tool that publishes incoming calls with CallerID to an MQTT channel')
     requiredNamed = parser.add_argument_group('required named arguments')
 
-    requiredNamed.add_argument("-a",    "--mqtt_address",   type=str, required=True, help="the MQTT broker address string")
-    requiredNamed.add_argument("-t",    "--mqtt_port",      type=int, required=True, help="the MQTT broker port number")
+    requiredNamed.add_argument("-a",    "--mqtt_address",   type=str, required=True, help="the MQTT broker address string", default=os.environ.get('MQTT_ADDRESS', None))
+    requiredNamed.add_argument("-t",    "--mqtt_port",      type=int, required=True, help="the MQTT broker port number", default=os.environ.get('MQTT_PORT', None))
     parser.add_argument(                "--mqtt_keepalive", type=int, required=False, help="the MQTT broker keep alive in seconds", default=60)
     parser.add_argument(                "--mqtt_protocol",  type=str, required=False, help="the MQTT broker protocol", default="MQTTv311", choices=['MQTTv31', 'MQTTv311'])
-    requiredNamed.add_argument("-u",    "--mqtt_username",  type=str, required=True, help="the MQTT broker username")
-    requiredNamed.add_argument("-p",    "--mqtt_password",  type=str, required=True, help="the MQTT broker password")
-    parser.add_argument(                "--status_topic",   type=str, required=False, help="the MQTT broker topic", default="home/sip")
+    requiredNamed.add_argument("-u",    "--mqtt_username",  type=str, required=True, help="the MQTT broker username", default=os.environ.get('MQTT_USERNAME', None))
+    requiredNamed.add_argument("-p",    "--mqtt_password",  type=str, required=False, help="the MQTT broker password", default=os.environ.get('MQTT_PASSWORD', None))
+    parser.add_argument(                "--status_topic",   type=str, required=False, help="the MQTT broker topic", default=os.environ.get('URL', "home/sip"))
 
-    parser.add_argument(                "--trans_conf_port",        type=int, required=False, help="the SIP transport port number", default=5060)
-    parser.add_argument(                "--trans_conf_bound_addr",  type=str, required=False, help="the SIP transport address string", default="")
+    parser.add_argument(                "--trans_conf_port",        type=int, required=False, help="the SIP transport port number", default=os.environ.get('TRANS_CONF_PORT', 5060))
+    parser.add_argument(                "--trans_conf_bound_addr",  type=str, required=False, help="the SIP transport address string", default=os.environ.get('TRANS_CONF_BOUND_ADDR', ""))
 
-    requiredNamed.add_argument("-d",    "--sip_domain",     type=str, required=True, help="the SIP domain")
-    requiredNamed.add_argument("-n",    "--sip_username",   type=str, required=True, help="the SIP username")
-    requiredNamed.add_argument("-s",    "--sip_password",   type=str, required=True, help="the SIP password")
+    requiredNamed.add_argument("-d",    "--sip_domain",     type=str, required=True, help="the SIP domain", default=os.environ.get('SIP_DOMAIN', None))
+    requiredNamed.add_argument("-n",    "--sip_username",   type=str, required=True, help="the SIP username", default=os.environ.get('SIP_USERNAME', None))
+    requiredNamed.add_argument("-s",    "--sip_password",   type=str, required=False, help="the SIP password", default=os.environ.get('SIP_PASSWORD', None))
     parser.add_argument(                "--sip_display",    type=str, required=False, help="the SIP user display name", default=app_name)
 
     parser.add_argument(                "--log_level",      type=int, required=False, help="the application log level", default=3, choices=[0, 1, 2, 3])
@@ -120,7 +118,14 @@ def main(argv):
     # Configure logging
     # logging.basicConfig(filename="sip2mqtt.log", format="%(asctime)s - %(levelname)s - %(message)s",
     #                     datefmt="%m/%d/%Y %I:%M:%S %p", level=log_level)
+    root = logging.getLogger()
+    root.setLevel(log_level)
 
+#    ch = logging.StreamHandler(sys.stdout)
+#    ch.setLevel(log_level)
+#    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+#    ch.setFormatter(formatter)
+#    root.addHandler(ch)
     # A more docker-friendly approach is to output to stdout
     logging.basicConfig(stream=sys.stdout, format="%(asctime)s - %(levelname)s - %(message)s",
                         datefmt="%m/%d/%Y %I:%M:%S %p", level=log_level)
@@ -148,7 +153,6 @@ def main(argv):
         #broker.on_message = mqtt_message #don't need this callback for now
         broker.connect(args.mqtt_address, args.mqtt_port, args.mqtt_keepalive)
 
-        # Start of the Main Class
         # Create library instance of Lib class
         lib = pj.Lib()
 
@@ -158,7 +162,7 @@ def main(argv):
         mc = pj.MediaConfig()
         mc.clock_rate = 8000
 
-        lib.init(ua_cfg = ua, log_cfg = pj.LogConfig(level=args.verbosity, callback=log_cb), media_cfg=mc)
+        lib.init(ua_cfg = ua, log_cfg = pj.LogConfig(level=args.verbosity, callback=None), media_cfg=mc)
         lib.create_transport(pj.TransportType.UDP, pj.TransportConfig(args.trans_conf_port))
         lib.set_null_snd_dev()
         lib.start()
