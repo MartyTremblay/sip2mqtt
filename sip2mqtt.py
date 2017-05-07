@@ -6,6 +6,7 @@ import threading
 import time
 import re
 import argparse
+import json
 import pjsua as pj
 import paho.mqtt.client as mqtt
 
@@ -46,7 +47,7 @@ class SMAccountCallback(pj.AccountCallback):
     def on_incoming_call(self, call):
         # Unless this callback is implemented, the default behavior is to reject the call with default status code.
         logging.info( "SIP: Incoming call from " + extract_caller_id( call.info().remote_uri ) )
-        broker.publish(args.status_topic, payload="{verb: 'incoming', caller:'" + extract_caller_id( call.info().remote_uri ) + "', uri:'" + call.info().remote_uri + "'}", qos=0, retain=True)
+        broker.publish(args.status_topic, payload="{\"verb\": \"incoming\", \"caller\":\"" + extract_caller_id( call.info().remote_uri ) + "\", \"uri\":" + json.dumps(call.info().remote_uri) + "}", qos=0, retain=True)
 
         current_call = call
         call_cb = SMCallCallback(current_call)
@@ -54,7 +55,7 @@ class SMAccountCallback(pj.AccountCallback):
 
     def on_pager(self, from_uri, contact, mime_type, body):
         logging.info( "SIP: Incoming SMS from " + from_uri )
-        broker.publish(args.status_topic, payload="{verb: 'sms', caller:'" + from_uri + "', body:'" + body + "'}", qos=0, retain=True)
+        broker.publish(args.status_topic, payload="{\"verb\": \"sms\", \"caller\":\"" + from_uri + "\", \"body\":" + json.dumps(body) + "}", qos=0, retain=True)
 
 
 class SMCallCallback(pj.CallCallback):
@@ -67,10 +68,10 @@ class SMCallCallback(pj.CallCallback):
         logging.info( 'SIP: Call state is: ' +  self.call.info().state_text )
         if self.call.info().state == pj.CallState.CONFIRMED:
             logging.info( 'SIP: Current call is answered' )
-            broker.publish(args.status_topic, payload="{verb: 'answered', caller:'" + extract_caller_id( self.call.info().remote_uri ) + "', uri:'" + self.call.info().remote_uri + "'}", qos=0, retain=True)
+            broker.publish(args.status_topic, payload="{\"verb\": \"answered\", \"caller\":\"" + extract_caller_id( self.call.info().remote_uri ) + "\", \"uri\":" + json.dumps(self.call.info().remote_uri) + "}", qos=0, retain=True)
         elif self.call.info().state == pj.CallState.DISCONNECTED:
             logging.info( 'SIP: Current call has ended' )
-            broker.publish(args.status_topic, payload="{verb: 'disconnected', caller:'', uri:''}", qos=0, retain=True)
+            broker.publish(args.status_topic, payload="{\"verb\": \"disconnected\", \"caller\":\"\", \"uri\":\"\"}", qos=0, retain=True)
 
 def main(argv):
     global broker
