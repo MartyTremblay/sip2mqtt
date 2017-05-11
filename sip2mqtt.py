@@ -13,8 +13,13 @@ import paho.mqtt.client as mqtt
 global args
 
 def extract_caller_id(url):
-    m = re.match(r"\"(.*)\"", url)
-    return m.group(1)
+    m = re.match(r"\"(.*)\".*:(.*)@", url)
+    return m.group(1) + " " + phone_format(m.group(2))
+
+def phone_format(phone_number):
+    clean_phone_number = re.sub('[^0-9]+', '', phone_number)
+    formatted_phone_number = re.sub("(\d)(?=(\d{3})+(?!\d))", r"\1-", "%d" % int(clean_phone_number[:-1])) + clean_phone_number[-1]
+    return formatted_phone_number
 
 def signal_handler(signal, frame):
     logging.info( 'Exiting...' )
