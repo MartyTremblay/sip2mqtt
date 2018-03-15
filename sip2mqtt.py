@@ -18,7 +18,14 @@ def extract_caller_id(url):
 
 def phone_format(phone_number):
     clean_phone_number = re.sub('[^0-9]+', '', phone_number)
-    formatted_phone_number = re.sub("(\d)(?=(\d{3})+(?!\d))", r"\1-", "%d" % int(clean_phone_number[:-1])) + clean_phone_number[-1]
+    formatted_phone_number = ''
+
+    try:
+        formatted_phone_number = re.sub("(\d)(?=(\d{3})+(?!\d))", r"\1-", "%d" % int(clean_phone_number[:-1])) + clean_phone_number[-1]
+    except:
+        logging.warn( "Warning: unable to format " + clean_phone_number )
+        formatted_phone_number = clean_phone_number
+
     return formatted_phone_number
 
 def signal_handler(signal, frame):
@@ -96,7 +103,7 @@ def main(argv):
     requiredNamed.add_argument("-u",    "--mqtt_username",  type=str, required=True, help="the MQTT broker username", default=os.environ.get('MQTT_USERNAME', None))
     requiredNamed.add_argument("-p",    "--mqtt_password",  type=str, required=False, help="the MQTT broker password", default=os.environ.get('MQTT_PASSWORD', None))
     parser.add_argument(                "--mqtt_topic",     type=str, required=False, help="the MQTT broker topic", default=os.environ.get('MQTT_TOPIC', "home/sip"))
-    
+
     requiredNamed.add_argument("-d",    "--sip_domain",     type=str, required=True, help="the SIP domain", default=os.environ.get('SIP_DOMAIN', None))
     parser.add_argument(                "--sip_port",       type=int, required=False, help="the SIP transport port number", default=os.environ.get('SIP_PORT', 5060))
     requiredNamed.add_argument("-n",    "--sip_username",   type=str, required=True, help="the SIP username", default=os.environ.get('SIP_USERNAME', None))
